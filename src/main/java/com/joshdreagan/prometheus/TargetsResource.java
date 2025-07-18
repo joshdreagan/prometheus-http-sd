@@ -15,52 +15,53 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.UnknownHostException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 @Path("/targets")
 public class TargetsResource {
 
   private static final Logger log = LoggerFactory.getLogger(TargetsResource.class);
 
-  @ConfigProperty(name = "hosts")
+  @ConfigProperty(name = "prometheus.http-sd.hosts")
   private List<String> hosts;
 
-  @ConfigProperty(name = "cidr", defaultValue = "192.168.0.0/24")
-  private String cidr;
+  @ConfigProperty(name = "prometheus.http-sd.cidrs", defaultValue = "192.168.0.0/16")
+  private List<String> cidrs;
 
   @GET
   @Produces(MediaType.APPLICATION_JSON)
   public RestResponse<List<Map<String, Object>>> getAll() {
     List<Map<String, Object>> results = new ArrayList<>();
 
-    IPAddressString cidrIPAddressString = new IPAddressString(cidr);
-
     for (String host : hosts) {
       HostName hostName = new HostName(host);
       try {
-        IPAddress resolvedIPAddresses = hostName.toAddress();
-        log.info("Resolved IP Address [{}] for host [{}].", resolvedIPAddresses.toString(), host);
-        IPAddress firstMatch = null;
-        for (IPAddress ipAddress : resolvedIPAddresses.getIterable()) {
-          boolean matches = cidrIPAddressString.contains(ipAddress.toAddressString());
-          if (matches) {
-            firstMatch = ipAddress;
+        IPAddress[] resolvedHostIpAddresses = hostName.toAllAddresses();
+        log.info("Resolved IP Addresses {} for host [{}].", Arrays.toString(resolvedHostIpAddresses), host);
+        boolean foundMatch = false;
+        for (IPAddress hostIpAddress : resolvedHostIpAddresses) {
+          for (String cidr : cidrs) {
+            IPAddressString cidrIpAddressString = new IPAddressString(cidr);
+            if (cidrIpAddressString.contains(hostIpAddress.toAddressString())) {
+              log.info("IP address [{}] for host [{}] matches CIDR {}.", hostIpAddress.toString(), host, cidr);
+              results.add(
+                Map.of(
+                  "labels", Map.of("job", host),
+                  "targets", Collections.singletonList(hostIpAddress.toString() + ":9100")
+                )
+              );
+              foundMatch = true;
+              break;
+            } else {
+              log.debug("IP address [{}] for host [{}] did not match CIDR [{}].", hostIpAddress, host, cidr);
+            }
+          }
+          if (foundMatch) {
             break;
           }
         }
-        if (firstMatch != null) {
-          log.info("Successfully resolved IP address [{}] for host [{}] that matches CIDR [{}].", firstMatch.toString(), host, cidr);
-          results.add(
-            Map.of(
-              "labels", Map.of("job", host),
-              "targets", Collections.singletonList(firstMatch.toString() + ":9100")
-            )
-          );
-        } else {
-          log.warn("Could not find IP address host [{}] that matches CIDR [{}].", host, cidr);
+        if (!foundMatch) {
+          log.warn("Could not find any IP address for host [{}] that matches any configured CIDR [{}].", host, Arrays.toString(cidrs.toArray()));
         }
       } catch (UnknownHostException | HostNameException e) {
         log.error("Could not resolve IP address for host [{}].", host);

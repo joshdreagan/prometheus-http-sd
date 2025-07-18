@@ -1,5 +1,19 @@
-cidr: "192.168.0.0/24"
-hosts:
-  - "marmot-01.local"
-  - "marmot-02.local"
-  - "camel-01.local"
+prometheus:
+  http-sd:
+    cidrs:
+      - "192.168.0.0/16"
+      - "fe80::/10"
+    hosts:
+      - "marmot-01.local"
+
+"%dev":
+  quarkus:
+    log:
+      category:
+        "com.joshdreagan":
+          level: DEBUG
+  prometheus:
+    http-sd:
+      hosts:
+        - "marmot-01.local"
+        - "camel-01.local"
