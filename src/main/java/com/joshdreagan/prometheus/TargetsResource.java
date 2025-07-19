@@ -4,6 +4,8 @@ import inet.ipaddr.HostName;
 import inet.ipaddr.HostNameException;
 import inet.ipaddr.IPAddress;
 import inet.ipaddr.IPAddressString;
+import io.quarkus.cache.CacheKey;
+import io.quarkus.cache.CacheResult;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
@@ -22,52 +24,96 @@ public class TargetsResource {
 
   private static final Logger log = LoggerFactory.getLogger(TargetsResource.class);
 
-  @ConfigProperty(name = "prometheus.http-sd.hosts")
-  private List<String> hosts;
+  private static final int DEFAULT_PORT = 9100;
 
-  @ConfigProperty(name = "prometheus.http-sd.cidrs", defaultValue = "192.168.0.0/16")
-  private List<String> cidrs;
+  @ConfigProperty(name = "prometheus.http-sd.hosts")
+  private HostName[] hosts;
+
+  @ConfigProperty(name = "prometheus.http-sd.resolve-hosts", defaultValue = "false")
+  private boolean resolveHosts;
+
+  @ConfigProperty(name = "prometheus.http-sd.skip-unknown-hosts", defaultValue = "true")
+  private boolean skipUnknownHosts;
+
+  @ConfigProperty(name = "prometheus.http-sd.cidrs")
+  private Optional<IPAddressString[]> cidrs;
+
+  @ConfigProperty(name = "prometheus.http-sd.skip-unmatched-hosts", defaultValue = "true")
+  private boolean skipUnmatchedHosts;
 
   @GET
   @Produces(MediaType.APPLICATION_JSON)
-  public RestResponse<List<Map<String, Object>>> getAll() {
+  public RestResponse<?> getAllTargets() {
     List<Map<String, Object>> results = new ArrayList<>();
 
-    for (String host : hosts) {
-      HostName hostName = new HostName(host);
+    for (HostName hostName : hosts) {
+      log.info("Generating target data for host [{}].",  hostName);
+
+      String job = hostName.getHost();
+      String target = hostName.getHost() + ":" + ((hostName.getPort() != null) ? hostName.getPort() : DEFAULT_PORT);
+
+      if (!resolveHosts && !cidrs.isPresent()) {
+        results.add(generateTargetJson(job, target));
+        continue;
+      }
+
+      IPAddress[] resolvedHostIpAddresses = null;
       try {
-        IPAddress[] resolvedHostIpAddresses = hostName.toAllAddresses();
-        log.info("Resolved IP Addresses {} for host [{}].", Arrays.toString(resolvedHostIpAddresses), host);
-        boolean foundMatch = false;
-        for (IPAddress hostIpAddress : resolvedHostIpAddresses) {
-          for (String cidr : cidrs) {
-            IPAddressString cidrIpAddressString = new IPAddressString(cidr);
-            if (cidrIpAddressString.contains(hostIpAddress.toAddressString())) {
-              log.info("IP address [{}] for host [{}] matches CIDR {}.", hostIpAddress.toString(), host, cidr);
-              results.add(
-                Map.of(
-                  "labels", Map.of("job", host),
-                  "targets", Collections.singletonList(hostIpAddress.toString() + ":9100")
-                )
-              );
-              foundMatch = true;
-              break;
-            } else {
-              log.debug("IP address [{}] for host [{}] did not match CIDR [{}].", hostIpAddress, host, cidr);
-            }
-          }
-          if (foundMatch) {
-            break;
-          }
-        }
-        if (!foundMatch) {
-          log.warn("Could not find any IP address for host [{}] that matches any configured CIDR [{}].", host, Arrays.toString(cidrs.toArray()));
-        }
+        resolvedHostIpAddresses = resolveHostName(hostName);
+        log.debug("Resolved IP Addresses {} for host [{}].", Arrays.toString(resolvedHostIpAddresses), hostName.getHost());
       } catch (UnknownHostException | HostNameException e) {
-        log.error("Could not resolve IP address for host [{}].", host);
-        log.debug("Error:", e);
+        log.error("Could not resolve IP address for host [{}].", hostName.getHost());
+        log.debug("StackTrace", e);
+        if (!skipUnknownHosts) {
+          return ResponseBuilder.serverError().build();
+        }
+        continue;
+      }
+
+      IPAddress firstMatchingResolvedIpAddress = resolvedHostIpAddresses[0];
+      if (cidrs.isPresent()) {
+        firstMatchingResolvedIpAddress = findFirstMatchingResolvedIpAddress(resolvedHostIpAddresses, cidrs.get());
+        if (firstMatchingResolvedIpAddress == null) {
+          log.warn("Could not find any IP address for host [{}] that matches any configured CIDR [{}].", hostName.getHost(), Arrays.toString(cidrs.get()));
+          if (!skipUnmatchedHosts) {
+            return ResponseBuilder.serverError().build();
+          }
+          continue;
+        }
+      }
+
+      target = firstMatchingResolvedIpAddress + ":" + ((hostName.getPort() != null) ? hostName.getPort() : DEFAULT_PORT);
+      results.add(generateTargetJson(job, target));
+    }
+
+    return ResponseBuilder.ok(results).build();
+  }
+
+  @CacheResult(cacheName = "resolved-host-names", keyGenerator = HostNameCacheKeyGenerator.class)
+  protected IPAddress[] resolveHostName(@CacheKey HostName hostName) throws HostNameException, UnknownHostException {
+    log.info("Resolving IP Addresses for host [{}].", hostName.getHost());
+    return hostName.toAllAddresses();
+  }
+
+  protected Map<String, Object> generateTargetJson(String job, String target) {
+    return Map.of(
+      "labels", Map.of("job", job),
+      "targets", Collections.singletonList(target)
+    );
+  }
+
+  protected IPAddress findFirstMatchingResolvedIpAddress(IPAddress[] resolvedHostIpAddresses, IPAddressString[] cidrIpAddresses) {
+    for (IPAddress resolvedHostIpAddress : resolvedHostIpAddresses) {
+      for (IPAddressString cidrIpAddress : cidrIpAddresses) {
+        if (cidrIpAddress.contains(resolvedHostIpAddress.toAddressString())) {
+          log.debug("IP address [{}] for host [{}] matches CIDR [{}].", resolvedHostIpAddress, resolvedHostIpAddress.toHostName(), cidrIpAddress);
+          return resolvedHostIpAddress;
+        } else {
+          log.debug("IP address [{}] for host [{}] did not match CIDR [{}].", resolvedHostIpAddress, resolvedHostIpAddress.toHostName(), cidrIpAddress);
+        }
       }
     }
-    return ResponseBuilder.ok(results).build();
+    log.warn("Could not find any IP address for host [{}] that matches any configured CIDR [{}].", resolvedHostIpAddresses[0].toHostName(), Arrays.toString(cidrIpAddresses));
+    return null;
   }
 }

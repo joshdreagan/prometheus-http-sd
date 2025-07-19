@@ -1,11 +1,3 @@
-prometheus:
-  http-sd:
-    cidrs:
-      - "192.168.0.0/16"
-      - "fe80::/10"
-    hosts:
-      - "marmot-01.local"
-
 "%dev":
   quarkus:
     log:
@@ -15,5 +7,11 @@ prometheus:
   prometheus:
     http-sd:
       hosts:
-        - "marmot-01.local"
-        - "camel-01.local"
+        - "marmot-01.local:9100"
+        #- "camel-01.local:9100"
+      resolve-hosts: true
+      skip-unknown-hosts: true
+      cidrs:
+        - "192.168.0.0/16"
+        - "fe80::/10"
+      skip-unmatched-hosts: true
