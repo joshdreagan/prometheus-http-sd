@@ -1,5 +1,8 @@
 "%dev":
   quarkus:
+    cache:
+      caffeine:
+        expire-after-write: 1M
     log:
       category:
         "com.joshdreagan":

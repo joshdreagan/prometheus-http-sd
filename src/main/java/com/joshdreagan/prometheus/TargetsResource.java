@@ -27,19 +27,19 @@ public class TargetsResource {
   private static final int DEFAULT_PORT = 9100;
 
   @ConfigProperty(name = "prometheus.http-sd.hosts")
-  private HostName[] hosts;
+  HostName[] hosts;
 
   @ConfigProperty(name = "prometheus.http-sd.resolve-hosts", defaultValue = "false")
-  private boolean resolveHosts;
+  boolean resolveHosts;
 
   @ConfigProperty(name = "prometheus.http-sd.skip-unknown-hosts", defaultValue = "true")
-  private boolean skipUnknownHosts;
+  boolean skipUnknownHosts;
 
   @ConfigProperty(name = "prometheus.http-sd.cidrs")
-  private Optional<IPAddressString[]> cidrs;
+  Optional<IPAddressString[]> cidrs;
 
   @ConfigProperty(name = "prometheus.http-sd.skip-unmatched-hosts", defaultValue = "true")
-  private boolean skipUnmatchedHosts;
+  boolean skipUnmatchedHosts;
 
   @GET
   @Produces(MediaType.APPLICATION_JSON)
@@ -52,7 +52,7 @@ public class TargetsResource {
       String job = hostName.getHost();
       String target = hostName.getHost() + ":" + ((hostName.getPort() != null) ? hostName.getPort() : DEFAULT_PORT);
 
-      if (!resolveHosts && !cidrs.isPresent()) {
+      if (!resolveHosts && cidrs.isEmpty()) {
         results.add(generateTargetJson(job, target));
         continue;
       }
@@ -113,7 +113,6 @@ public class TargetsResource {
         }
       }
     }
-    log.warn("Could not find any IP address for host [{}] that matches any configured CIDR [{}].", resolvedHostIpAddresses[0].toHostName(), Arrays.toString(cidrIpAddresses));
     return null;
   }
 }
